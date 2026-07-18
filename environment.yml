@@ -1,0 +1,11 @@
+name: emg-music-controller
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+      - pyqt6==6.4.2
+      - pyqtgraph==0.13.3
+      - pyserial==3.5

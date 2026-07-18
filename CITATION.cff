@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use this system or project in your work, please cite it as below."
+authors:
+  - family-names: "Shekhar"
+    given-names: "Rudransh"
+  - family-names: "P"
+    given-names: "Midhun"
+  - family-names: "Shukla"
+    given-names: "Moli"
+  - family-names: "Bhakkaad"
+    given-names: "Aayushi Pankaj"
+  - family-names: "SR"
+    given-names: "Akash"
+title: "EMG Controlled Music System Using Arduino"
+version: 1.0.0
+date-released: 2026-04-30
+url: "https://github.com/rudy-07/EMG-Music-Controller"
+repository-code: "https://github.com/rudy-07/EMG-Music-Controller"
+license: MIT
