@@ -1,0 +1,319 @@
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <SoftwareSerial.h>
+#include <DFRobotDFPlayerMini.h>
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+SoftwareSerial dfSerial(2, 3);
+DFRobotDFPlayerMini dfplayer;
+
+#define TRIG 6
+#define ECHO 7
+#define EMG A0
+
+// -------- EMG --------
+int flexThreshold  = 650;
+int relaxThreshold = 580;
+
+bool isPlaying = false;
+bool flexDetected = false;
+unsigned long lastToggleTime = 0;
+unsigned long cooldownPeriod = 5000;
+
+// -------- Songs --------
+struct Song {
+  const char* name;
+  const char* artist;
+  int duration;
+};
+
+Song songs[] = {
+  {"Metamorphosis", "Interworld", 141},
+  {"Rave", "Dxrk", 169},
+  {"Murder In My Mind", "Kordhell", 145}
+};
+
+int currentSong = 0;
+
+// -------- Timing --------
+unsigned long songStartTime = 0;
+unsigned long accumulatedTime = 0;
+
+// -------- Ultrasonic --------
+long durationUS;
+int distance;
+int volume;
+
+void setup() {
+
+  Serial.begin(9600);
+  dfSerial.begin(9600);
+
+  pinMode(TRIG, OUTPUT);
+  pinMode(ECHO, INPUT);
+
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  display.clearDisplay();
+  display.display();
+
+  dfplayer.begin(dfSerial);
+  dfplayer.volume(15);
+  dfplayer.play(currentSong + 1);
+  dfplayer.pause();
+
+  isPlaying = false;
+}
+
+void loop() {
+
+  updateUltrasonic();
+  updateEMG();
+  checkSerialCommands();
+  updateSongLogic();
+  drawUI();
+
+  sendSerialPacket();  // structured output for app
+
+  delay(10);  // smooth loop
+}
+
+// ---------------- ULTRASONIC ----------------
+void updateUltrasonic() {
+
+  digitalWrite(TRIG, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG, LOW);
+
+  durationUS = pulseIn(ECHO, HIGH, 30000);  // 30ms timeout
+
+  if (durationUS == 0) return;
+
+  distance = durationUS * 0.034 / 2;
+
+  if (distance < 5) distance = 5;
+  if (distance > 40) distance = 40;
+
+  volume = map(distance, 5, 40, 30, 5);
+  dfplayer.volume(volume);
+}
+
+// ---------------- EMG ----------------
+void updateEMG() {
+
+  int emgValue = analogRead(EMG);
+
+  if (emgValue > flexThreshold && !flexDetected)
+    flexDetected = true;
+
+  if (emgValue < relaxThreshold && flexDetected) {
+
+    unsigned long now = millis();
+
+    if (now - lastToggleTime > cooldownPeriod) {
+
+      if (isPlaying) {
+        dfplayer.pause();
+        accumulatedTime += millis() - songStartTime;
+        isPlaying = false;
+      } else {
+        dfplayer.start();
+        songStartTime = millis();
+        isPlaying = true;
+      }
+
+      lastToggleTime = now;
+    }
+
+    flexDetected = false;
+  }
+}
+
+// ---------------- NON-BLOCKING SERIAL COMMANDS ----------------
+void checkSerialCommands() {
+
+  if (!Serial.available()) return;
+
+  char cmd = Serial.read();
+
+  if (cmd == 'T') {
+    if (isPlaying) {
+      dfplayer.pause();
+      accumulatedTime += millis() - songStartTime;
+      isPlaying = false;
+    } else {
+      dfplayer.start();
+      songStartTime = millis();
+      isPlaying = true;
+    }
+  }
+
+  else if (cmd == 'N') {
+    currentSong++;
+    if (currentSong > 2) currentSong = 0;
+    dfplayer.play(currentSong + 1);
+    accumulatedTime = 0;
+    songStartTime = millis();
+    isPlaying = true;
+  }
+
+  else if (cmd == 'P') {
+    currentSong--;
+    if (currentSong < 0) currentSong = 2;
+    dfplayer.play(currentSong + 1);
+    accumulatedTime = 0;
+    songStartTime = millis();
+    isPlaying = true;
+  }
+
+  else if (cmd == 'M') {
+    dfplayer.volume(0);
+  }
+
+  else if (cmd == 'U') {
+    dfplayer.volume(volume);
+  }
+
+  else if (cmd == '0' || cmd == '1' || cmd == '2') {
+    currentSong = cmd - '0';
+    dfplayer.play(currentSong + 1);
+    accumulatedTime = 0;
+    songStartTime = millis();
+    isPlaying = true;
+  }
+}
+
+// ---------------- SONG LOOP ----------------
+void updateSongLogic() {
+
+  unsigned long elapsed;
+
+  if (isPlaying)
+    elapsed = accumulatedTime + (millis() - songStartTime);
+  else
+    elapsed = accumulatedTime;
+
+  int elapsedSec = elapsed / 1000;
+
+  if (elapsedSec >= songs[currentSong].duration) {
+
+    currentSong++;
+    if (currentSong > 2) currentSong = 0;
+
+    dfplayer.play(currentSong + 1);
+
+    accumulatedTime = 0;
+    songStartTime = millis();
+    isPlaying = true;
+  }
+}
+
+// ---------------- SEND SERIAL PACKET ----------------
+void sendSerialPacket() {
+
+  unsigned long elapsed;
+
+  if (isPlaying)
+    elapsed = accumulatedTime + (millis() - songStartTime);
+  else
+    elapsed = accumulatedTime;
+
+  int elapsedSec = elapsed / 1000;
+
+  Serial.print("EMG:");
+  Serial.print(analogRead(EMG));
+  Serial.print("|DIST:");
+  Serial.print(distance);
+  Serial.print("|VOL:");
+  Serial.print(volume);
+  Serial.print("|STATE:");
+  Serial.print(isPlaying ? "PLAYING" : "PAUSED");
+  Serial.print("|SONG:");
+  Serial.print(currentSong);
+  Serial.print("|TIME:");
+  Serial.println(elapsedSec);
+}
+
+// ---------------- OLED UI ----------------
+void drawUI() {
+
+  display.clearDisplay();
+  display.setTextColor(WHITE);
+  display.setTextSize(1);
+
+  display.setCursor(0, 0);
+  display.print("EMG Controller");
+
+  unsigned long totalSeconds = millis() / 1000;
+  int hours = (totalSeconds / 3600) % 12;
+  if (hours == 0) hours = 12;
+  int minutes = (totalSeconds / 60) % 60;
+
+  display.setCursor(80, 0);
+  if (hours < 10) display.print("0");
+  display.print(hours);
+  display.print(":");
+  if (minutes < 10) display.print("0");
+  display.print(minutes);
+  display.print(" PM");
+
+  unsigned long elapsed;
+
+  if (isPlaying)
+    elapsed = accumulatedTime + (millis() - songStartTime);
+  else
+    elapsed = accumulatedTime;
+
+  int elapsedSec = elapsed / 1000;
+  int totalSec = songs[currentSong].duration;
+
+  int em = elapsedSec / 60;
+  int es = elapsedSec % 60;
+  int tm = totalSec / 60;
+  int ts = totalSec % 60;
+
+  display.setCursor(0, 14);
+  display.print(songs[currentSong].name);
+
+  display.setCursor(0, 24);
+  display.print(songs[currentSong].artist);
+
+  int barWidth = map(elapsedSec, 0, totalSec, 0, 120);
+  display.drawRect(4, 36, 120, 6, WHITE);
+  display.fillRect(4, 36, barWidth, 6, WHITE);
+
+  display.setCursor(0, 45);
+  if (em < 10) display.print("0");
+  display.print(em);
+  display.print(":");
+  if (es < 10) display.print("0");
+  display.print(es);
+  display.print("/");
+  if (tm < 10) display.print("0");
+  display.print(tm);
+  display.print(":");
+  if (ts < 10) display.print("0");
+  display.print(ts);
+
+  display.setCursor(75, 45);
+  if (isPlaying) display.print("PLAYING");
+  else display.print("PAUSED");
+
+  display.setCursor(90, 55);
+  display.print("VOL:");
+  display.print(volume);
+
+  display.setCursor(0, 55);
+  display.print("EMG:");
+  display.print(analogRead(EMG));
+  display.print(" DIST:");
+  display.print(distance);
+
+  display.display();
+}
